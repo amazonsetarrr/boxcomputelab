@@ -1,0 +1,90 @@
+# IOS-XE post-check playbook
+#
+# Runs the same 10 read-only "show" commands as the pre-check, then runs
+# "write memory" as the 11th command to save the running config to startup.
+# Output is saved to reports/postcheck_<host>_<timestamp>.txt.
+#
+# WARNING: "write memory" changes the device's startup configuration.
+#
+# Usage:
+#   export IOSXE_USER=admin IOSXE_PASSWORD='...' IOSXE_ENABLE_PASSWORD='...'
+#   ansible-playbook -i inventory/hosts.yml playbooks/ios_xe_postcheck.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/ios_xe_postcheck.yml -e postcheck_fail_on_error=true
+---
+- name: IOS-XE post-check - run 10 show commands and write memory
+  hosts: all
+  gather_facts: false
+  connection: ansible.netcommon.network_cli
+
+  vars:
+    ansible_network_os: cisco.ios.ios
+    ansible_become: true
+    ansible_become_method: enable
+
+    # The 10 post-check commands (read-only), followed by "write memory"
+    postcheck_show_commands:
+      - show version
+      - show clock
+      - show inventory
+      - show ip interface brief
+      - show interfaces description
+      - show ip route summary
+      - show processes cpu
+      - show memory statistics
+      - show logging
+      - show ntp status
+
+    postcheck_commands: "{{ postcheck_show_commands + ['write memory'] }}"
+
+    # Set to true to fail the host when IOS-XE rejects any command
+    postcheck_fail_on_error: false
+
+    postcheck_report_dir: "{{ playbook_dir }}/../reports"
+    postcheck_error_regex: '% (Invalid input|Unknown command|Unrecognized command|Incomplete command|Ambiguous command)'
+
+  tasks:
+    - name: Run the 10 post-check commands and write memory
+      cisco.ios.ios_command:
+        commands: "{{ postcheck_commands }}"
+      register: postcheck
+
+    - name: Count commands that IOS-XE rejected
+      ansible.builtin.set_fact:
+        postcheck_error_count: "{{ postcheck.stdout | select('match', '(?s).*' ~ postcheck_error_regex) | list | length }}"
+
+    - name: Ensure the report directory exists on the control node
+      ansible.builtin.file:
+        path: "{{ postcheck_report_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Write the report file on the control node
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ios_xe_report.j2"
+        dest: "{{ postcheck_report_dir }}/postcheck_{{ inventory_hostname }}_{{ lookup('pipe', 'date -u +%Y%m%d_%H%M%S') }}.txt"
+        mode: "0644"
+      vars:
+        report_title: "IOS-XE post-check report"
+        report_commands: "{{ postcheck_commands }}"
+        report_outputs: "{{ postcheck.stdout }}"
+        report_error_count: "{{ postcheck_error_count }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Show post-check summary
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "Commands run: {{ postcheck_commands | length }} (includes write memory)"
+          - "Commands rejected by IOS-XE: {{ postcheck_error_count }}"
+          - "Report: {{ postcheck_report_dir }}"
+
+    - name: Fail the host if any command was rejected and failing is enabled
+      ansible.builtin.fail:
+        msg: "{{ postcheck_error_count }} post-check command(s) were rejected on {{ inventory_hostname }}. Review the report."
+      when:
+        - postcheck_fail_on_error | bool
+        - postcheck_error_count | int > 0

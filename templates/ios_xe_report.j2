@@ -1,0 +1,11 @@
+{{ report_title }}
+{{ '=' * (report_title | length) }}
+Host:     {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})
+Date UTC: {{ now(utc=true).strftime('%Y-%m-%d %H:%M:%S') }}
+Commands: {{ report_commands | length }}
+Rejected: {{ report_error_count }}
+{% for cmd in report_commands %}
+
+########## [{{ loop.index }}/{{ report_commands | length }}] {{ cmd }} ##########
+{{ report_outputs[loop.index0] }}
+{% endfor %}

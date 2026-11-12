@@ -1,6 +1,6 @@
 # IOS-XE pre-check playbook
 #
-# Runs 10 read-only "show" commands on Cisco IOS-XE devices, saves the
+# Runs 10 read-only "show" commands on every host in the inventory, saves the
 # combined output to reports/<host>_<timestamp>.txt and prints a summary.
 #
 # Usage:
@@ -9,7 +9,7 @@
 #   ansible-playbook -i inventory/hosts.yml playbooks/ios_xe_precheck.yml -e precheck_fail_on_error=true
 ---
 - name: IOS-XE pre-check - run 10 show commands
-  hosts: ios_xe
+  hosts: all
   gather_facts: false
   connection: ansible.netcommon.network_cli
 
@@ -58,9 +58,14 @@
 
     - name: Write the report file on the control node
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/precheck_report.j2"
-        dest: "{{ precheck_report_dir }}/{{ inventory_hostname }}_{{ lookup('pipe', 'date -u +%Y%m%d_%H%M%S') }}.txt"
+        src: "{{ playbook_dir }}/../templates/ios_xe_report.j2"
+        dest: "{{ precheck_report_dir }}/precheck_{{ inventory_hostname }}_{{ lookup('pipe', 'date -u +%Y%m%d_%H%M%S') }}.txt"
         mode: "0644"
+      vars:
+        report_title: "IOS-XE pre-check report"
+        report_commands: "{{ precheck_commands }}"
+        report_outputs: "{{ precheck.stdout }}"
+        report_error_count: "{{ precheck_error_count }}"
       delegate_to: localhost
       become: false
 
