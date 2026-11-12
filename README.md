@@ -9,6 +9,10 @@ Two playbooks run against every host in the inventory (`hosts: all`):
 
 Each run writes one report file per host to `reports/`.
 
+`playbooks/ios_xe_diff.yml` compares the newest pre-check and post-check report
+for each host and writes the difference to `reports/diff_<host>_<timestamp>.txt`.
+It runs on the control node only and does not connect to devices.
+
 | # | Command |
 |---|---------|
 | 1 | `show version` |
@@ -32,6 +36,7 @@ requirements.yml             # cisco.ios and ansible.netcommon
 inventory/hosts.yml          # example devices, credentials from env vars
 playbooks/ios_xe_precheck.yml
 playbooks/ios_xe_postcheck.yml
+playbooks/ios_xe_diff.yml
 templates/ios_xe_report.j2   # shared report format
 reports/                     # generated output (git-ignored)
 ```
@@ -59,12 +64,25 @@ ansible-playbook playbooks/ios_xe_precheck.yml --limit iosxe-rtr-01
 # Post-check: runs the 10 show commands, then "write memory"
 ansible-playbook playbooks/ios_xe_postcheck.yml
 
+# Diff: compare the newest pre-check and post-check report for each host
+ansible-playbook playbooks/ios_xe_diff.yml
+
 # Fail the host if IOS-XE rejects any command (for example, an unsupported command on that platform)
 ansible-playbook playbooks/ios_xe_precheck.yml -e precheck_fail_on_error=true
 ```
 
 Each run writes `reports/precheck_<host>_<UTC timestamp>.txt` or `reports/postcheck_<host>_<UTC timestamp>.txt`. The report lists every
 command with its output and a count of commands that IOS-XE rejected.
+
+### Reading the diff
+
+The diff playbook removes lines that change on every run before comparing:
+the report title, `Date UTC`, `Commands:` (the post-check has 11 commands), and
+`show clock` output. Everything else is compared, so the diff shows real state
+changes, including the `write memory` entry that only the post-check has.
+Add more ignore patterns by changing `diff_ignore_regex` in the playbook.
+Counters such as CPU and memory statistics and log lines can still differ
+between runs and will appear in the diff.
 
 ### Notes
 

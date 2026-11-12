@@ -1,0 +1,121 @@
+# IOS-XE pre/post diff playbook
+#
+# Compares the newest pre-check report with the newest post-check report for
+# each host and writes a unified diff to reports/diff_<host>_<timestamp>.txt.
+# Runs on the control node only; it does not connect to any device.
+#
+# Lines that change on every run (report title, report date, command count,
+# clock output) are removed from both reports before diffing, so the diff
+# shows only real device-state changes and the added "write memory" command.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/ios_xe_diff.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/ios_xe_diff.yml --limit iosxe-rtr-01
+---
+- name: IOS-XE pre/post diff - compare latest reports per host
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    diff_report_dir: "{{ playbook_dir }}/../reports"
+    diff_hosts: "{{ groups['all'] | reject('equalto', 'localhost') | list }}"
+
+    # One regex: a report line matching it is removed from both sides before diffing.
+    diff_ignore_regex: '^(Date UTC|IOS-XE (pre|post)-check report$|=+$|Commands: |\*?[0-9]{1,2}:[0-9]{2}:[0-9]{2})'
+
+  tasks:
+    - name: Ensure the report directory exists
+      ansible.builtin.file:
+        path: "{{ diff_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Find the newest pre-check and post-check reports for each host
+      ansible.builtin.set_fact:
+        diff_pairs: >-
+          {{ diff_pairs | default([]) + [{
+               'host': item,
+               'pre': (lookup('ansible.builtin.fileglob', diff_report_dir ~ '/precheck_' ~ item ~ '_*.txt', wantlist=True) | sort | last | default('')),
+               'post': (lookup('ansible.builtin.fileglob', diff_report_dir ~ '/postcheck_' ~ item ~ '_*.txt', wantlist=True) | sort | last | default(''))
+             }] }}
+      loop: "{{ diff_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Keep only hosts that have both a pre-check and a post-check report
+      ansible.builtin.set_fact:
+        diff_active: "{{ diff_pairs | selectattr('pre', 'ne', '') | selectattr('post', 'ne', '') | list }}"
+
+    - name: Report hosts that are missing a pre-check or post-check report
+      ansible.builtin.debug:
+        msg: "{{ item.host }}: missing pre-check or post-check report, skipped"
+      loop: "{{ diff_pairs }}"
+      loop_control:
+        label: "{{ item.host }}"
+      when: item.pre == '' or item.post == ''
+
+    - name: Create a temporary work directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: iosxe_diff_
+      register: diff_workdir
+
+    - name: Write normalised pre-check copies
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', item.pre).splitlines() | reject('match', diff_ignore_regex) | join('\n') ~ '\n' }}"
+        dest: "{{ diff_workdir.path }}/pre_{{ item.host }}.txt"
+        mode: "0600"
+      loop: "{{ diff_active }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Write normalised post-check copies
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.file', item.post).splitlines() | reject('match', diff_ignore_regex) | join('\n') ~ '\n' }}"
+        dest: "{{ diff_workdir.path }}/post_{{ item.host }}.txt"
+        mode: "0600"
+      loop: "{{ diff_active }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Build the unified diff for each host
+      ansible.builtin.command:
+        argv:
+          - diff
+          - -u
+          - --label
+          - pre-check
+          - --label
+          - post-check
+          - "{{ diff_workdir.path }}/pre_{{ item.host }}.txt"
+          - "{{ diff_workdir.path }}/post_{{ item.host }}.txt"
+      register: diff_result
+      changed_when: false
+      failed_when: diff_result.rc > 1
+      loop: "{{ diff_active }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Write each diff to a report file
+      ansible.builtin.copy:
+        content: "{{ (item.stdout ~ '\n') if item.stdout | length > 0 else 'No differences between pre-check and post-check.\n' }}"
+        dest: "{{ diff_report_dir }}/diff_{{ item.item.host }}_{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%d_%H%M%S') }}.txt"
+        mode: "0644"
+      loop: "{{ diff_result.results }}"
+      loop_control:
+        label: "{{ item.item.host }}"
+
+    - name: Show the diff summary per host
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.host }}: {{ 'no differences' if item.stdout | length == 0
+             else ((item.stdout_lines | select('match', '^[+-][^+-]') | list | length) | string) ~ ' changed line(s)' }}
+      loop: "{{ diff_result.results }}"
+      loop_control:
+        label: "{{ item.item.host }}"
+
+    - name: Remove the temporary work directory
+      ansible.builtin.file:
+        path: "{{ diff_workdir.path }}"
+        state: absent
