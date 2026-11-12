@@ -1,0 +1,11 @@
+IOS-XE pre-check report
+=======================
+Host:     {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})
+Date UTC: {{ now(utc=true).strftime('%Y-%m-%d %H:%M:%S') }}
+Commands: {{ precheck_commands | length }}
+Rejected: {{ precheck_error_count }}
+{% for cmd in precheck_commands %}
+
+########## [{{ loop.index }}/{{ precheck_commands | length }}] {{ cmd }} ##########
+{{ precheck.stdout[loop.index0] }}
+{% endfor %}

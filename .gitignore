@@ -1,0 +1,5 @@
+reports/
+*.retry
+.venv/
+collections/
+__pycache__/
